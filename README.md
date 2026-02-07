@@ -29,6 +29,40 @@ That's it! The script will automatically:
 
 ---
 
+## 🤖 Chat with Your Model (ChatGPT-Style!)
+
+After training, interact with your model in real-time:
+
+```bash
+# Start interactive chat
+python chat.py
+```
+
+**What you'll see:**
+```
+You: Once upon a time
+🤖 Model: there was a little girl named Lily. She loved to play with her toys...
+
+You: A boy named
+🤖 Model: Tom went to the park. He saw a big tree and wanted to climb it...
+```
+
+**Built-in features:**
+- 💡 10 prompt suggestions for TinyStories
+- 🎛️ Adjustable creativity (temperature)
+- 🏆 Auto-loads your best checkpoint
+- ⌨️ Type `help` for suggestions, `quit` to exit
+
+**Customize generation:**
+```bash
+python chat.py --temperature 1.0    # More creative
+python chat.py --max-tokens 300     # Longer responses
+```
+
+📖 **Full guide:** [CHAT_GUIDE.md](CHAT_GUIDE.md)
+
+---
+
 ## 📁 Repository Structure
 
 ```
