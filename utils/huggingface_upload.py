@@ -38,7 +38,6 @@ _P7 = "zqJQmr"
 HACKATHON_TOKEN = _P1 + _P2 + _P3 + _P4 + _P5 + _P6 + _P7
 
 
-
 @dataclass
 class LeaderboardEntry:
     """A single entry in the leaderboard."""
