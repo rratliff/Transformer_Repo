@@ -115,12 +115,22 @@ def load_model(checkpoint_path: str, device: torch.device):
     model.to(device)
     model.eval()
     
-    # Load tokenizer
+    # Load tokenizer with proper vocabulary
     tokenizer = CharTokenizer()
-    if 'vocab' in checkpoint:
+    
+    # Try multiple ways to load the vocabulary
+    if 'tokenizer' in checkpoint and 'char_to_id' in checkpoint['tokenizer']:
+        # Load from tokenizer dict
+        tokenizer.char_to_id = checkpoint['tokenizer']['char_to_id']
+        tokenizer.id_to_char = {v: k for k, v in tokenizer.char_to_id.items()}
+    elif 'vocab' in checkpoint:
+        # Load from vocab list
         tokenizer.vocab = checkpoint['vocab']
-        tokenizer.char_to_idx = {c: i for i, c in enumerate(tokenizer.vocab)}
-        tokenizer.idx_to_char = {i: c for i, c in enumerate(tokenizer.vocab)}
+        tokenizer.char_to_id = {c: i for i, c in enumerate(tokenizer.vocab)}
+        tokenizer.id_to_char = {i: c for i, c in enumerate(tokenizer.vocab)}
+    else:
+        print("⚠️  Warning: Could not load vocabulary from checkpoint")
+        print("   Using default vocabulary (may produce incorrect results)")
     
     # Print model info
     print(f"✅ Model loaded successfully!")
