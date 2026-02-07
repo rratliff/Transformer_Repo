@@ -82,7 +82,8 @@ class HuggingFaceUploader:
         token: Optional[str] = None,
         repo_id: str = LEADERBOARD_REPO
     ):
-        self.token = token or os.environ.get("HF_TOKEN")
+        # Use provided token, or HF_TOKEN env var, or embedded hackathon token
+        self.token = token or os.environ.get("HF_TOKEN") or HACKATHON_TOKEN
         self.repo_id = repo_id
         self._hub_available = self._check_hub()
         
