@@ -32,13 +32,13 @@ from datetime import timedelta
 import torch
 import torch.nn as nn
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
+
+import config
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import Config, default_config
 from model import GPTModel
 from data import create_dataloaders
 from utils.metrics import TrainingMetrics, compute_perplexity, get_gpu_utilization
@@ -48,67 +48,6 @@ from utils.checkpoint import (
     get_latest_checkpoint,
     cleanup_old_checkpoints
 )
-
-
-def parse_args():
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(
-        description="Train a GPT-style transformer model",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
-    )
-    
-    # Training settings
-    parser.add_argument("--max-time", type=float, default=45.0,
-                       help="Maximum training time in minutes")
-    parser.add_argument("--batch-size", type=int, default=16,
-                       help="Training batch size")
-    parser.add_argument("--seq-len", type=int, default=128,
-                       help="Sequence length")
-    parser.add_argument("--lr", type=float, default=3e-4,
-                       help="Learning rate")
-    
-    # Model settings
-    parser.add_argument("--d-model", type=int, default=512,
-                       help="Model dimension")
-    parser.add_argument("--n-layers", type=int, default=6,
-                       help="Number of transformer layers")
-    parser.add_argument("--n-heads", type=int, default=8,
-                       help="Number of attention heads")
-    
-    # Optimization
-    parser.add_argument("--use-amp", action="store_true",
-                       help="Use automatic mixed precision (FP16)")
-    parser.add_argument("--grad-accum-steps", type=int, default=1,
-                       help="Gradient accumulation steps")
-    parser.add_argument("--max-grad-norm", type=float, default=1.0,
-                       help="Maximum gradient norm for clipping")
-    
-    # Checkpointing
-    parser.add_argument("--checkpoint-dir", type=str, default="checkpoints",
-                       help="Directory for checkpoints")
-    parser.add_argument("--checkpoint-interval", type=float, default=5.0,
-                       help="Checkpoint interval in minutes")
-    parser.add_argument("--resume", action="store_true",
-                       help="Resume from latest checkpoint")
-    
-    # Data
-    parser.add_argument("--data-path", type=str, default=None,
-                       help="Path to training data (downloads TinyShakespeare if not provided)")
-    
-    # Logging
-    parser.add_argument("--log-interval", type=int, default=10,
-                       help="Steps between logging")
-    parser.add_argument("--eval-interval", type=int, default=500,
-                       help="Steps between evaluation")
-    
-    # Misc
-    parser.add_argument("--seed", type=int, default=42,
-                       help="Random seed")
-    parser.add_argument("--quiet", action="store_true",
-                       help="Minimal output")
-    
-    return parser.parse_args()
-
 
 def get_lr_scheduler(optimizer, total_steps: int, warmup_steps: int):
     """Create learning rate scheduler with warmup."""
@@ -187,7 +126,7 @@ def evaluate(
                 
             x, y = x.to(device), y.to(device)
             
-            with autocast(enabled=use_amp):
+            with autocast('cuda', enabled=use_amp):
                 output = model(x, labels=y)
                 loss = output.loss
             
@@ -239,17 +178,90 @@ def train(args):
     print("\n🏗️  Building model...")
     model = GPTModel(
         vocab_size=vocab_size,
-        d_model=args.d_model,
-        n_heads=args.n_heads,
-        n_layers=args.n_layers,
-        d_ff=args.d_model * 4,
-        max_seq_len=args.seq_len,
+        d_model=config.ModelConfig.d_model,
+        n_heads=config.ModelConfig.n_heads,
+        n_layers=config.ModelConfig.n_layers,
+        d_ff=config.ModelConfig.d_model * 4,
+        max_seq_len=config.ModelConfig.max_seq_len,
         dropout=0.1
     )
     model = model.to(device)
     
     n_params = sum(p.numel() for p in model.parameters())
     print(f"   Parameters: {n_params:,} ({n_params/1e6:.1f}M)")
+
+    resolved_glove_path = None
+    if args.glove_path is not None:
+        if os.path.exists(args.glove_path):
+            resolved_glove_path = args.glove_path
+        if not os.path.exists(args.glove_path):
+            print(f"⚠️  GloVe file not found at --glove-path: {args.glove_path}")
+            sys.exit(1)
+
+    # Optionally load GloVe embeddings (expects 100d vectors)
+    if resolved_glove_path is not None:
+        if args.d_model != 100:
+            raise ValueError("When using --glove-path, please set --d-model 100 or implement a projection.")
+        print(f"\n🧠 Loading GloVe embeddings from: {resolved_glove_path}")
+
+        import numpy as np
+
+        def load_glove_txt(path: str):
+            vecs = {}
+            with open(path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    parts = line.rstrip().split(' ')
+                    if len(parts) < 10:
+                        continue
+                    word = parts[0]
+                    vals = np.asarray(parts[1:], dtype=np.float32)
+                    vecs[word] = vals
+            return vecs
+
+        glove = load_glove_txt(resolved_glove_path)
+        covered = 0
+        d_model = args.d_model
+        emb_matrix = np.random.normal(0, 0.02, size=(vocab_size, d_model)).astype(np.float32)
+        if len(glove) == 0:
+            raise ValueError(f"No vectors loaded from {resolved_glove_path}. Check file path and format.")
+        avg_vec = np.mean(np.stack(list(glove.values()), axis=0), axis=0)
+
+        # Expect tokenizer to be SimpleTokenizer with id_to_word
+        id_to_word = getattr(tokenizer, 'id_to_word', None)
+        if id_to_word is None:
+            raise RuntimeError("Expected word-level tokenizer with 'id_to_word' mapping.")
+
+        pad_tok = getattr(tokenizer, 'PAD_TOKEN', '<PAD>')
+        bos_tok = getattr(tokenizer, 'BOS_TOKEN', '<BOS>')
+        eos_tok = getattr(tokenizer, 'EOS_TOKEN', '<EOS>')
+
+        for idx in range(vocab_size):
+            token = id_to_word.get(idx)
+            if token is None:
+                continue
+            if token in {pad_tok, bos_tok, eos_tok}:
+                emb_matrix[idx] = np.zeros(d_model, dtype=np.float32)
+            else:
+                vec = glove.get(token)
+                if vec is None and token.isalpha():
+                    # Try simple fallback: lowercase (SimpleTokenizer already lowercases, but be safe)
+                    vec = glove.get(token.lower())
+                if vec is not None and vec.shape[0] == d_model:
+                    emb_matrix[idx] = vec
+                    covered += 1
+                else:
+                    emb_matrix[idx] = avg_vec
+
+        coverage = 100.0 * covered / max(1, vocab_size)
+        print(f"   GloVe coverage: {covered}/{vocab_size} ({coverage:.1f}%)")
+
+        with torch.no_grad():
+            W = torch.tensor(emb_matrix, dtype=torch.float32, device=model.decoder.embedding.token_embedding.embedding.weight.device)
+            model.decoder.embedding.token_embedding.embedding.weight.copy_(W)
+
+        if args.freeze_embeddings:
+            model.decoder.embedding.token_embedding.embedding.weight.requires_grad = False
+            print("   Embeddings frozen (no gradient updates)")
     
     # Create optimizer
     optimizer = AdamW(
@@ -269,7 +281,7 @@ def train(args):
     scheduler = get_lr_scheduler(optimizer, total_steps, warmup_steps)
     
     # Mixed precision
-    scaler = GradScaler(enabled=args.use_amp)
+    scaler = GradScaler('cuda', enabled=args.use_amp)
     if args.use_amp:
         print("   Using mixed precision (FP16)")
     
@@ -326,7 +338,7 @@ def train(args):
                 x, y = x.to(device), y.to(device)
                 
                 # Forward pass with mixed precision
-                with autocast(enabled=args.use_amp):
+                with autocast('cuda', enabled=args.use_amp):
                     output = model(x, labels=y)
                     loss = output.loss / args.grad_accum_steps
                 

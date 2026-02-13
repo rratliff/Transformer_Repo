@@ -17,7 +17,7 @@ from typing import Tuple, Optional
 import torch
 from torch.utils.data import Dataset, DataLoader, random_split
 
-from data.tokenizer import CharTokenizer
+from data.tokenizer import CharTokenizer, SimpleTokenizer
 
 
 # Dataset URLs
@@ -191,7 +191,7 @@ def create_dataloaders(
     num_workers: int = 0,
     seed: int = 42,
     max_stories: int = 40000
-) -> Tuple[DataLoader, DataLoader, CharTokenizer]:
+) -> Tuple[DataLoader, DataLoader, SimpleTokenizer]:
     """
     Create train and validation dataloaders.
     
@@ -235,8 +235,9 @@ def create_dataloaders(
     
     print(f"Loaded {len(text):,} characters")
     
-    # Create tokenizer
-    tokenizer = CharTokenizer(text)
+    # Create tokenizer (switch to word-level for GloVe compatibility)
+    tokenizer = SimpleTokenizer(min_freq=1, max_vocab_size=None)
+    tokenizer.build_vocab(text)
     print(f"Vocabulary size: {tokenizer.vocab_size}")
     
     # Create dataset
@@ -252,6 +253,8 @@ def create_dataloaders(
     )
     
     print(f"Train samples: {len(train_dataset):,}, Val samples: {len(val_dataset):,}")
+
+    use_pin_memory = torch.cuda.is_available()
     
     # Create dataloaders
     train_loader = DataLoader(
@@ -259,7 +262,7 @@ def create_dataloaders(
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
-        pin_memory=True,
+        pin_memory=use_pin_memory,
         drop_last=True  # Drop incomplete batches for consistent batch size
     )
     
@@ -268,7 +271,7 @@ def create_dataloaders(
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=True,
+        pin_memory=use_pin_memory,
         drop_last=False
     )
     

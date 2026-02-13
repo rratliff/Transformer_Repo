@@ -22,14 +22,13 @@ import json
 from typing import Optional, Dict, List
 
 import torch
-import torch.nn.functional as F
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import Config
+import config
 from model import GPTModel
-from data import create_dataloaders, CharTokenizer
+from data import create_dataloaders, CharTokenizer, SimpleTokenizer
 from utils.metrics import (
     compute_perplexity, 
     compute_accuracy,
@@ -83,13 +82,20 @@ def load_model_and_tokenizer(
     print(f"Loading checkpoint from {checkpoint_path}...")
     checkpoint = torch.load(checkpoint_path, map_location=device)
     
-    # Get model configuration
-    config = checkpoint.get('config', {})
-    
-    # Load tokenizer
+    # Load tokenizer (auto-detect char vs word)
     tokenizer_path = os.path.join(os.path.dirname(checkpoint_path), "tokenizer.json")
     if os.path.exists(tokenizer_path):
-        tokenizer = CharTokenizer.load(tokenizer_path)
+        try:
+            with open(tokenizer_path, 'r', encoding='utf-8') as f:
+                tok_meta = json.load(f)
+            tok_type = tok_meta.get('type', 'char')
+            if tok_type == 'word':
+                tokenizer = SimpleTokenizer.load(tokenizer_path)
+            else:
+                tokenizer = CharTokenizer.load(tokenizer_path)
+        except Exception:
+            # Fallback to char
+            tokenizer = CharTokenizer.load(tokenizer_path)
     else:
         # Try to get from checkpoint
         tok_data = checkpoint.get('tokenizer', {})
@@ -103,11 +109,11 @@ def load_model_and_tokenizer(
     # Create model with same configuration
     model = GPTModel(
         vocab_size=tokenizer.vocab_size,
-        d_model=config.get('d_model', 512),
-        n_heads=config.get('n_heads', 8),
-        n_layers=config.get('n_layers', 6),
-        d_ff=config.get('d_model', 512) * 4,
-        max_seq_len=config.get('seq_len', 128),
+        d_model=config.ModelConfig.d_model,
+        n_heads=config.ModelConfig.n_heads,
+        n_layers=config.ModelConfig.n_layers,
+        d_ff=config.ModelConfig.d_model * 4,
+        max_seq_len=config.ModelConfig.max_seq_len,
     )
     
     # Load weights

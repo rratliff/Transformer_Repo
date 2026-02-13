@@ -196,37 +196,6 @@ The repository includes **refactored Jupyter notebooks** for hands-on learning:
 - Try implementing functions in practice cells
 - Compare with reference implementations
 
----
-
-## 🏆 Hackathon Rules
-
-### Competition Categories
-
-1. **🥇 Best Model Performance**
-   - Lowest perplexity wins
-   - Primary ranking metric
-
-2. **⚡ Most Efficient Training**
-   - Highest tokens/second
-   - Speed matters!
-
-3. **📝 Best Generation Quality**
-   - Highest Distinct-2 score
-   - Text should be diverse and coherent
-
-4. **🎨 Most Creative Optimization**
-   - Judged by organizers
-   - Document your changes!
-
-### Rules
-
-- Training time: **60 minutes** (configurable)
-- Hardware: Use whatever you have (T4 GPU recommended)
-- Code: Modify anything except timing enforcement
-- Collaboration: Team up to 4 people
-
----
-
 ## 🚀 One-Click Colab Setup
 
 Run this cell to set everything up instantly!
@@ -244,18 +213,17 @@ assert torch.cuda.is_available(), "⚠️ Enable GPU: Runtime > Change runtime t
 %cd Transformer_Repo-
 
 # Install dependencies
-!pip install -q torch numpy tqdm huggingface_hub datasets
+!pip install -r requirements.txt
 
-# Start Hackathon! (60 minutes on T4 GPU)
-# (Leaderboard upload happens automatically with embedded token)
-!python run_hackathon.py --time 60
+# Start Hackathon! (5 minutes on MacbookPro)
+!python run_hackathon.py --time 5 --name Glove 
 ```
 
 ---
 
 ## 🤖 Interactive Chat with Your Model
 
-**NEW!** Chat with your trained model in real-time using our ChatGPT-like interface!
+Chat with your trained model in real-time using our ChatGPT-like interface.
 
 ```python
 # After training, chat with your model!

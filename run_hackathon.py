@@ -3,13 +3,12 @@
 Automated Hackathon Pipeline for the Transformer Hackathon.
 
 This is the MAIN script participants should run. It:
-    1. Prompts for participant name and team
-    2. Confirms/configures Hugging Face token
-    3. Trains for exactly 45 minutes
-    4. Runs evaluation metrics
-    5. Generates sample text
-    6. Uploads results to leaderboard
-    7. Displays final metrics and ranking
+    1. Confirms/configures Hugging Face token
+    2. Trains for the configured runtime
+    3. Runs evaluation metrics
+    4. Generates sample text
+    5. Uploads results to leaderboard
+    6. Displays final metrics and ranking
 
 Usage:
     python run_hackathon.py
@@ -22,14 +21,11 @@ import os
 import sys
 import json
 import time
-from datetime import datetime
+import datetime
 from typing import Optional, Dict
+from train import train
 
 import torch
-
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 
 def print_banner():
     """Print the hackathon banner."""
@@ -50,34 +46,6 @@ def print_banner():
 ╚═══════════════════════════════════════════════════════════════════════╝
 """
     print(banner)
-
-
-def get_participant_info() -> Dict[str, str]:
-    """Get participant name and team from user input."""
-    print("\n📝 PARTICIPANT REGISTRATION")
-    print("-" * 50)
-    
-    # Get name
-    while True:
-        name = input("Enter your name: ").strip()
-        if name:
-            break
-        print("Name cannot be empty. Please try again.")
-    
-    # Get team (optional)
-    team = input("Enter your team name (press Enter to skip): ").strip()
-    if not team:
-        team = "Solo"
-    
-    # Confirm
-    print(f"\n✓ Name: {name}")
-    print(f"✓ Team: {team}")
-    
-    confirm = input("\nIs this correct? (Y/n): ").strip().lower()
-    if confirm in ('n', 'no'):
-        return get_participant_info()
-    
-    return {'name': name, 'team': team}
 
 
 def check_huggingface_token() -> Optional[str]:
@@ -106,10 +74,7 @@ def run_training(training_time: float = 45.0) -> Dict:
     print(f"Training will run for {training_time} minutes")
     print("Feel free to watch the progress or grab a coffee! ☕")
     print()
-    
-    # Import training module
-    from train import train
-    
+
     # Create args namespace
     class Args:
         # Honor the selected training time from the hackathon runner
@@ -117,9 +82,10 @@ def run_training(training_time: float = 45.0) -> Dict:
         batch_size = 16
         seq_len = 128
         lr = 3e-4
-        d_model = 512
-        n_layers = 6
-        n_heads = 8
+        # Use GloVe-compatible defaults
+        d_model = 100
+        n_layers = 2
+        n_heads = 5
         use_amp = torch.cuda.is_available()  # Auto-enable on GPU
         grad_accum_steps = 1
         max_grad_norm = 1.0
@@ -131,7 +97,14 @@ def run_training(training_time: float = 45.0) -> Dict:
         eval_interval = 500
         seed = 42
         quiet = False
-    
+        # GloVe-related (passthrough to train.py)
+        glove_path = None
+        freeze_embeddings = False
+        auto_download_glove = False
+        glove_repo_id = "stanfordnlp/glove"
+        glove_filename = "glove.6B.100d.txt"
+        glove_repo_type = "dataset"
+
     args = Args()
     
     # Run training
@@ -234,7 +207,7 @@ def print_final_results(
     
     print("\n")
     print("╔" + "═" * 68 + "╗")
-    print("║" + " " * 20 + "🏆 FINAL RESULTS 🏆" + " " * 21 + "║")
+    print("║" + " " * 25 + "🏆 FINAL RESULTS 🏆" + " " * 26 + "║")
     print("╠" + "═" * 68 + "╣")
     print(f"║  Participant: {participant['name']:<53}║")
     print(f"║  Team: {participant['team']:<60}║")
@@ -242,11 +215,13 @@ def print_final_results(
     print("║  PERFORMANCE METRICS" + " " * 47 + "║")
     print(f"║  • Perplexity: {eval_m['perplexity']:<52.2f}║")
     print(f"║  • Validation Loss: {eval_m['loss']:<47.4f}║")
-    print(f"║  • Token Accuracy: {eval_m['accuracy']*100:<47.2f}%║")
+    acc_str = f"{eval_m['accuracy'] * 100:.2f}%"
+    print(f"║  • Token Accuracy: {acc_str:<48}║")
     print("╠" + "═" * 68 + "╣")
     print("║  EFFICIENCY METRICS" + " " * 48 + "║")
     print(f"║  • Tokens/Second: {metrics.get('avg_tokens_per_sec', 0):<49.0f}║")
-    print(f"║  • Training Time: {training_time:<49.1f}min║")
+    time_str = f"{training_time / 60:.2f} min"
+    print(f"║  • Training Time: {time_str:<49}║")
     print(f"║  • Total Tokens: {metrics.get('total_tokens', 0):<50,}║")
     print("╠" + "═" * 68 + "╣")
     print("║  GENERATION QUALITY" + " " * 48 + "║")
@@ -265,17 +240,19 @@ def print_final_results(
 
 
 def save_results_locally(
-    participant: Dict,
+    name: str,
     metrics: Dict,
     eval_results: Dict,
     training_time: float
 ):
     """Save results to local file."""
     os.makedirs("results", exist_ok=True)
+
+    participant = {"name":name, "team":"Solo"}
     
     results = {
         'participant': participant,
-        'timestamp': datetime.utcnow().isoformat(),
+        'timestamp': datetime.datetime.now(datetime.UTC).isoformat(),
         'training_time_minutes': training_time,
         'training_metrics': metrics,
         'evaluation': {
@@ -301,8 +278,18 @@ def main():
     parser = argparse.ArgumentParser(description="Run the transformer hackathon pipeline")
     parser.add_argument("--time", type=float, default=45.0,
                        help="Training time in minutes (default: 45)")
+    # {'name': name, 'team': team}
+    parser.add_argument("--name", type=str, default=None,
+                       help="Name")
     parser.add_argument("--skip-train", action="store_true",
                        help="Skip training (use existing checkpoint)")
+    # GloVe flags passthrough to train.py
+    parser.add_argument("--glove-path", type=str, default=None,
+                       help="Path to GloVe .txt file (e.g., glove.6B.100d.txt)")
+    parser.add_argument("--freeze-embeddings", action="store_true",
+                       help="Freeze embedding weights after loading GloVe")
+    parser.add_argument("--skip-leaderboard", action="store_true",
+                        help="Skip leaderboard upload (for local testing)")
     args = parser.parse_args()
     
     # Print banner
@@ -313,16 +300,13 @@ def main():
         print(f"🚀 GPU detected: {torch.cuda.get_device_name(0)}")
     else:
         print("⚠️  No GPU detected. Training will be slower on CPU.")
-        proceed = input("Continue anyway? (y/N): ").strip().lower()
-        if proceed not in ('y', 'yes'):
-            print("Exiting. Try running on a machine with a GPU!")
-            sys.exit(0)
-    
+
     # Get participant info
-    participant = get_participant_info()
-    
-    # Check HuggingFace token
-    hf_token = check_huggingface_token()
+    participant = {"name":args.name, "team":"Solo"}
+
+    if not args.skip_leaderboard:
+        # Check HuggingFace token
+        hf_token = check_huggingface_token()
     
     # Confirm start
     print("\n" + "=" * 50)
@@ -331,15 +315,16 @@ def main():
     print(f"• Training time: {args.time} minutes")
     print(f"• Participant: {participant['name']}")
     print(f"• Team: {participant['team']}")
-    # Show correct leaderboard status (embedded token is always available)
-    if hf_token:
-        print(f"• Leaderboard: Enabled (your HF token)")
+    # Show GloVe configuration summary
+    if args.glove_path:
+        print("• GloVe: Enabled", end="")
+        if args.glove_path:
+            print(f" (path: {args.glove_path})")
+        if args.freeze_embeddings:
+            print("  ↳ Embeddings will be frozen")
     else:
-        print(f"• Leaderboard: Enabled (embedded token)")
-    print("=" * 50)
-    
-    input("\nPress Enter to start training... 🚀")
-    
+        print("• GloVe: Disabled (training from scratch)")
+
     # Track start time
     start_time = time.time()
     
@@ -358,16 +343,16 @@ def main():
     # Calculate actual training time
     total_time = (time.time() - start_time) / 60
     
-    # Upload results
-    if hf_token or True:  # Always try, will save locally if no token
-        upload_results(participant, metrics, eval_results, hf_token)
-    
     # Print final results
     print_final_results(participant, metrics, eval_results, args.time)
     
     # Save locally
-    save_results_locally(participant, metrics, eval_results, args.time)
-    
+    save_results_locally(args.name, metrics, eval_results, args.time)
+
+    # Upload results
+    if not args.skip_leaderboard and hf_token:
+        upload_results(args.name, metrics, eval_results, hf_token)
+
     # Final message
     print("\n" + "=" * 70)
     print("🎉 HACKATHON RUN COMPLETE!")

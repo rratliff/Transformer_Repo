@@ -26,7 +26,7 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from model import GPTModel
-from data import CharTokenizer
+from data import CharTokenizer, SimpleTokenizer
 from utils.checkpoint import get_latest_checkpoint
 
 
@@ -78,10 +78,20 @@ def load_model_and_tokenizer(
     # Get model configuration
     config = checkpoint.get('config', {})
     
-    # Load tokenizer
+    # Load tokenizer (auto-detect char vs word)
     tokenizer_path = os.path.join(os.path.dirname(checkpoint_path), "tokenizer.json")
     if os.path.exists(tokenizer_path):
-        tokenizer = CharTokenizer.load(tokenizer_path)
+        try:
+            import json as _json
+            with open(tokenizer_path, 'r', encoding='utf-8') as f:
+                tok_meta = _json.load(f)
+            tok_type = tok_meta.get('type', 'char')
+            if tok_type == 'word':
+                tokenizer = SimpleTokenizer.load(tokenizer_path)
+            else:
+                tokenizer = CharTokenizer.load(tokenizer_path)
+        except Exception:
+            tokenizer = CharTokenizer.load(tokenizer_path)
     else:
         tok_data = checkpoint.get('tokenizer', {})
         if tok_data and tok_data.get('char_to_id'):
@@ -91,18 +101,55 @@ def load_model_and_tokenizer(
         else:
             raise ValueError("Tokenizer not found")
     
+    # Infer robust configuration from checkpoint when needed
+    state_dict = checkpoint.get('model_state_dict', {})
+
+    def infer_n_layers(sd):
+        try:
+            prefixes = [k for k in sd.keys() if k.startswith('decoder.layers.')]
+            layer_indices = []
+            for k in prefixes:
+                parts = k.split('.')
+                if len(parts) > 2 and parts[0] == 'decoder' and parts[1] == 'layers':
+                    try:
+                        layer_indices.append(int(parts[2]))
+                    except ValueError:
+                        pass
+            return (max(layer_indices) + 1) if layer_indices else None
+        except Exception:
+            return None
+
+    cfg_d_model = config.get('d_model', 512)
+    cfg_n_heads = config.get('n_heads', 8)
+    cfg_n_layers = config.get('n_layers', None)
+    cfg_seq_len = config.get('seq_len', 128)
+
+    inferred_layers = infer_n_layers(state_dict)
+    if cfg_n_layers is None and inferred_layers is not None:
+        cfg_n_layers = inferred_layers
+    elif cfg_n_layers is not None and inferred_layers is not None and cfg_n_layers != inferred_layers:
+        print(f"[WARNING] Checkpoint layer count ({inferred_layers}) differs from saved config ({cfg_n_layers}). Using {inferred_layers} to match weights.")
+        cfg_n_layers = inferred_layers
+
+    if cfg_n_layers is None:
+        cfg_n_layers = 6
+
     # Create model
     model = GPTModel(
         vocab_size=tokenizer.vocab_size,
-        d_model=config.get('d_model', 512),
-        n_heads=config.get('n_heads', 8),
-        n_layers=config.get('n_layers', 6),
-        d_ff=config.get('d_model', 512) * 4,
-        max_seq_len=config.get('seq_len', 128),
+        d_model=cfg_d_model,
+        n_heads=cfg_n_heads,
+        n_layers=cfg_n_layers,
+        d_ff=cfg_d_model * 4,
+        max_seq_len=cfg_seq_len,
     )
     
-    # Load weights
-    model.load_state_dict(checkpoint['model_state_dict'])
+    # Load weights (strict by default; if mismatch, retry non-strict)
+    try:
+        model.load_state_dict(state_dict)
+    except RuntimeError as e:
+        print(f"[WARNING] Strict load failed with error: {e}\nRetrying with strict=False (some layers may be randomly initialized).")
+        model.load_state_dict(state_dict, strict=False)
     model = model.to(device)
     model.eval()
     
